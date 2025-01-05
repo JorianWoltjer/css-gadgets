@@ -1,23 +1,32 @@
 const parsel = require("./parsel.js");
 const satisfy = require("./satisfy.js");
-const css = require('css');
+const CSSOM = require('cssom');
 const fs = require('fs');
+const util = require('util');
 
 // Values here are regexes (full match)
-// const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background: .*'].map(parseProperty);
-const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background-color: #fff'].map(parseProperty);
+const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background: .*'].map(parseProperty);
 // Any rule containing these properties will be ignored. Note: you may be able to overwrite any of these manually.
 const AVOID_PROPERTIES = ['opacity: ((0|0?\\.\\d+)|\\d{0,2}(\\.\\d+)?%)', 'display: none', 'z-index: -\d+'].map(parseProperty);
 // const AVOID_PROPERTIES = [].map(parseProperty);
 // TODO: allow filtering selectors by being able to use arbitrary tag names, IDs, nested elements or pseudo-classes
 // TODO: check !important (priority)
-// TODO: search for gadgets in @media queries rules too?
 // TODO: check duplicate keys in TARGET_PROPERTIES and AVOID_PROPERTIES
 const LOG_FAILS = false;  // Log when combining selectors into HTML fails. You may be able to come up with a solution manually.
 
 // copy((await Promise.all([...document.styleSheets].map(s => s.href ? fetch(s.href).then(r => r.text()) : s.ownerNode.innerText))).join('\n'))
 const content = fs.readFileSync(process.argv[2], 'utf8');
-const ast = css.parse(content);
+
+function parse(content) {
+    // https://github.com/NV/CSSOM/issues/51
+
+    // https://github.com/NV/CSSOM/issues/116
+    // TODO: just switch back
+    const ast = CSSOM.parse(content);
+    return ast;
+}
+
+const ast = parse(content);
 // console.log(util.inspect(ast, false, null, true));
 // exit();
 
@@ -29,47 +38,52 @@ function splitOnce(s, separator) {
     return [s.slice(0, index), s.slice(index + separator.length)];
 }
 function parseProperty(s) {
-    let [property, value] = splitOnce(s, ':').map(s => s.trim().replace(/;$/, '').toLowerCase());
+    let [name, value] = splitOnce(s, ':').map(s => s.trim().replace(/;$/, '').toLowerCase());
     value = new RegExp(`^${value}$`);
-    return { property, value };
+    return { name, value };
 }
 function serializeProperty(p) {
-    return `${p.property}: ${p.value}`;
+    return `${p.name}: ${p.value}`;
 }
 
 function findGadgets(ast) {
     const gadgets = Object.fromEntries(TARGET_PROPERTIES.map(target => [serializeProperty(target), { target, selectors: [] }]));
 
     // Try to find gadgets for all target properties
-    for (const rule of ast.stylesheet.rules) {
-        if (rule.type !== 'rule') continue;
+    for (const rule of ast.cssRules) {
+        // TODO: search for gadgets in @media queries/@support rules too?
+        if (rule.type !== CSSOM.CSSRule.STYLE_RULE) continue;
 
+        const properties = Array.from(rule.style).map(name => ({ name, value: rule.style.getPropertyValue(name) }));;
         // Check if this rule has any properties to avoid
-        if (rule.declarations.some(d => AVOID_PROPERTIES.some(p => d.property === p.property && d.value.match(p.value)))) continue;
+        if (properties.some(d => AVOID_PROPERTIES.some(p => d.name === p.name && d.value.match(p.value)))) continue;
 
         // Loop over all properties in this rule
-        for (const declaration of rule.declarations) {
-            if (declaration.type !== 'declaration') continue;
-            // Remove !important, it is not part of the value
-            declaration.value = declaration.value.replace(/\s*!important$/, '');
+        for (let i = 0; i < rule.style.length; i++) {
+            const name = rule.style[i];
+            const value = rule.style.getPropertyValue(name);
 
-            const other_properties = rule.declarations.filter(d => d !== declaration).map(d => ({ property: d.property, value: d.value }));
+            const other_properties = properties.filter(p => p.name !== name);
+            // Selector may contain multiple with ',' comma
+            let selectors = parsel.parse(rule.selectorText);
+            if (selectors.type !== 'list') {
+                selectors = { type: 'list', list: [selectors] };
+            }
 
             for (const target of TARGET_PROPERTIES) {
                 // Check if it matches the target property
-                if (target.property !== declaration.property || !declaration.value.match(target.value)) continue;
+                if (target.name !== name || !value.match(target.value)) continue;
 
-                console.log(`${declaration.property}: ${declaration.value} => ${rule.selectors.join(', ')}`);
-                // The further down the file, the higher the priority
-                for (const selector of rule.selectors) {
+                console.log(`${name}: ${value} => ${parsel.stringify(selectors)}`);
+                for (const selector of selectors.list) {
                     // Some selector syntax has higher priority than other (https://developer.mozilla.org/en-US/docs/Web/CSS/Specificity)
-                    const { line, column } = rule.position.start;
-                    const priority = [...parsel.specificity(selector), line, column];
+                    // The further down the file, the higher the priority
+                    const priority = [...parsel.specificity(selector), rule.__starts];
 
                     gadgets[serializeProperty(target)].selectors.push({
-                        selector,
+                        selector: parsel.stringify(selector),
                         priority,
-                        match: { property: declaration.property, value: declaration.value },
+                        match: { name, value },
                         other_properties,
                     });
                 }
@@ -77,9 +91,31 @@ function findGadgets(ast) {
         }
     }
 
+    function weightSelector(selector) {
+        const overwritingTargetProperties = selector.other_properties.reduce(
+            (total, p) => total + TARGET_PROPERTIES.some(t => p.name == t.name && !p.value.match(t.value)),
+            0);
+
+        const selectorComplexity = parsel.tokenize(selector.selector).reduce(
+            (total, token) => total + ({
+                "type": 5,
+                "attribute": 1,
+                "id": 1,
+            }[token.type] || 0),
+            0);
+
+        // The higher this return value, the lower down in the search order it will go
+        // - It is bad to have a complex selector, likely difficult to combine
+        // - It is bad to overwrite other target properties (specificity may solve this so don't deny outright)
+        // - It is slightly bad to have a lot of other properties, more chance of weird unwanted CSS
+        return selectorComplexity * 20 + overwritingTargetProperties * 10 + selector.other_properties.length;
+    }
+
     // Shortest selectors first, most likely to not have conflicts
     for (const [key, value] of Object.entries(gadgets)) {
-        value.selectors.sort((a, b) => a.other_properties.length - b.other_properties.length);
+        value.selectors.sort((a, b) => {
+            return weightSelector(a) - weightSelector(b);
+        });
     }
 
     return Object.values(gadgets);
@@ -119,6 +155,7 @@ function satisfyMany(selectors) {
             const r = result[j];
             const a = toBeAdded[j];
             if (r.nodeName !== a.nodeName) {
+                // TODO: if it is a <div>, should make it <any>. then we can chance it once to allow more combinations
                 throw new Error(`Cannot merge ${r.nodeName} with ${a.nodeName}`);
             }
             for (const attribute of a.attributes) {
@@ -139,18 +176,18 @@ function satisfyMany(selectors) {
     return fromList(result).outerHTML;
 }
 
-function findMatchingSelectors(gadgets) {
+function findCombinations(gadgets) {
     const selectedSelectors = []; // To store currently selected selectors
 
     function isOverwriting(selectorA, targetA, selectorB, targetB) {
         // Check priority to find who overwrites whom
         if (selectorA.priority > selectorB.priority) {
             return selectorA.other_properties.some(p =>
-                p.property === targetB.property && !p.value.match(targetB.value)
+                p.name === targetB.name && !p.value.match(targetB.value)
             );
         } else {
             return selectorB.other_properties.some(p =>
-                p.property === targetA.property && !p.value.match(targetA.value)
+                p.name === targetA.name && !p.value.match(targetA.value)
             );
         }
     }
@@ -163,6 +200,7 @@ function findMatchingSelectors(gadgets) {
             try {
                 html = satisfyMany(selectedSelectors.map(s => s.selector));
                 // TODO: find avoid selectors and querySelector the HTML to check (side effects)
+                // ^^ this will be hard because specificity may make it not matter
             } catch (e) {
                 if (!LOG_FAILS) return;
                 error = e;
@@ -210,6 +248,7 @@ function findMatchingSelectors(gadgets) {
 
 // Mapping of target properties to selectors and their other properties
 const gadgets = findGadgets(ast);
+console.log(util.inspect(gadgets, { depth: null, colors: true, maxArrayLength: null }));
 
 console.log("=".repeat(80));
 for (const gadget of gadgets) {
@@ -223,4 +262,4 @@ for (const gadget of gadgets) {
 console.log("=".repeat(80));
 
 // Find where the selector rules don't overwrite each other
-findMatchingSelectors(gadgets);
+findCombinations(gadgets);

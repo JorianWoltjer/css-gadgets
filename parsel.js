@@ -7,7 +7,7 @@ const TOKENS = {
     'pseudo-element': /::(?<name>[-\w\P{ASCII}]+)(?:\((?<argument>¶*)\))?/gu,
     'pseudo-class': /:(?<name>[-\w\P{ASCII}]+)(?:\((?<argument>¶*)\))?/gu,
     universal: /(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?\*/gu,
-    type: /(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?(?<name>[-\w\P{ASCII}]+)/gu, // this must be last
+    type: /(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?(?<name>[-@\w\P{ASCII}]+)/gu, // this must be last
 };
 const TRIM_TOKENS = new Set(['combinator', 'comma']);
 const RECURSIVE_PSEUDO_CLASSES = new Set([
@@ -94,7 +94,7 @@ function tokenizeBy(text, grammar = TOKENS) {
     for (const token of tokens) {
         switch (typeof token) {
             case 'string':
-                throw new Error(`Unexpected sequence ${token} found at index ${offset}`);
+                throw new Error(`Unexpected sequence ${token} found at index ${offset} (${text})`);
             case 'object':
                 offset += token.content.length;
                 token.pos = [offset - token.content.length, offset];
@@ -151,8 +151,8 @@ function tokenize(selector, grammar = TOKENS) {
             const tokenOffset = offset - token.pos[0];
             token.content =
                 content.slice(0, tokenOffset) +
-                    value +
-                    content.slice(tokenOffset + value.length);
+                value +
+                content.slice(tokenOffset + value.length);
             if (token.content !== content) {
                 changedTokens.add(token);
             }
@@ -236,11 +236,11 @@ function nestTokens(tokens, { list = true } = {}) {
 /**
  * Traverse an AST in depth-first order
  */
-function* flatten(node, 
-/**
- * @internal
- */
-parent) {
+function* flatten(node,
+    /**
+     * @internal
+     */
+    parent) {
     switch (node.type) {
         case 'list':
             for (let child of node.list) {
@@ -264,11 +264,11 @@ parent) {
 /**
  * Traverse an AST (or part thereof), in depth-first order
  */
-function walk(node, visit, 
-/**
- * @internal
- */
-parent) {
+function walk(node, visit,
+    /**
+     * @internal
+     */
+    parent) {
     if (!node) {
         return;
     }
