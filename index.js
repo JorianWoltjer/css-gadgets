@@ -1,8 +1,8 @@
 const parsel = require("./parsel.js");
 const satisfy = require("./satisfy.js");
-const CSSOM = require('cssom');
+const css = require('css');
 const fs = require('fs');
-const util = require('util');
+// const util = require('util');
 
 // Values here are regexes (full match)
 const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background: .*'].map(parseProperty);
@@ -10,23 +10,13 @@ const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%
 const AVOID_PROPERTIES = ['opacity: ((0|0?\\.\\d+)|\\d{0,2}(\\.\\d+)?%)', 'display: none', 'z-index: -\d+'].map(parseProperty);
 // const AVOID_PROPERTIES = [].map(parseProperty);
 // TODO: allow filtering selectors by being able to use arbitrary tag names, IDs, nested elements or pseudo-classes
-// TODO: check !important (priority)
+// TODO: check !important (priority). this doesn't seem like a big issue
 // TODO: check duplicate keys in TARGET_PROPERTIES and AVOID_PROPERTIES
 const LOG_FAILS = false;  // Log when combining selectors into HTML fails. You may be able to come up with a solution manually.
 
 // copy((await Promise.all([...document.styleSheets].map(s => s.href ? fetch(s.href).then(r => r.text()) : s.ownerNode.innerText))).join('\n'))
 const content = fs.readFileSync(process.argv[2], 'utf8');
-
-function parse(content) {
-    // https://github.com/NV/CSSOM/issues/51
-
-    // https://github.com/NV/CSSOM/issues/116
-    // TODO: just switch back
-    const ast = CSSOM.parse(content);
-    return ast;
-}
-
-const ast = parse(content);
+const ast = css.parse(content);
 // console.log(util.inspect(ast, false, null, true));
 // exit();
 
@@ -50,40 +40,42 @@ function findGadgets(ast) {
     const gadgets = Object.fromEntries(TARGET_PROPERTIES.map(target => [serializeProperty(target), { target, selectors: [] }]));
 
     // Try to find gadgets for all target properties
-    for (const rule of ast.cssRules) {
-        // TODO: search for gadgets in @media queries/@support rules too?
-        if (rule.type !== CSSOM.CSSRule.STYLE_RULE) continue;
+    for (const rule of ast.stylesheet.rules) {
+        if (rule.type !== 'rule') continue;
 
-        const properties = Array.from(rule.style).map(name => ({ name, value: rule.style.getPropertyValue(name) }));;
         // Check if this rule has any properties to avoid
+        const properties = rule.declarations.filter(d => d.type === 'declaration').map(d => ({ name: d.property, value: d.value }));
         if (properties.some(d => AVOID_PROPERTIES.some(p => d.name === p.name && d.value.match(p.value)))) continue;
 
         // Loop over all properties in this rule
-        for (let i = 0; i < rule.style.length; i++) {
-            const name = rule.style[i];
-            const value = rule.style.getPropertyValue(name);
+        for (const property of properties) {
+            // Remove !important, it is not part of the value
+            property.value = property.value.replace(/\s*!important$/, '');
 
-            const other_properties = properties.filter(p => p.name !== name);
-            // Selector may contain multiple with ',' comma
-            let selectors = parsel.parse(rule.selectorText);
-            if (selectors.type !== 'list') {
-                selectors = { type: 'list', list: [selectors] };
-            }
+            const other_properties = properties.filter(d => d !== property);
 
             for (const target of TARGET_PROPERTIES) {
                 // Check if it matches the target property
-                if (target.name !== name || !value.match(target.value)) continue;
+                if (target.name !== property.name || !property.value.match(target.value)) continue;
 
-                console.log(`${name}: ${value} => ${parsel.stringify(selectors)}`);
-                for (const selector of selectors.list) {
+                console.log(`${property.name}: ${property.value} => ${rule.selectors.join(', ')}`);
+                for (const selector of rule.selectors) {
                     // Some selector syntax has higher priority than other (https://developer.mozilla.org/en-US/docs/Web/CSS/Specificity)
                     // The further down the file, the higher the priority
-                    const priority = [...parsel.specificity(selector), rule.__starts];
+                    const { line, column } = rule.position.start;
+                    let specificity;
+                    try {
+                        specificity = parsel.specificity(selector);
+                    } catch (e) {
+                        console.error(e.message);
+                        continue;
+                    }
+                    const priority = [...specificity, line, column];
 
                     gadgets[serializeProperty(target)].selectors.push({
-                        selector: parsel.stringify(selector),
+                        selector,
                         priority,
-                        match: { name, value },
+                        match: property,
                         other_properties,
                     });
                 }
@@ -248,7 +240,7 @@ function findCombinations(gadgets) {
 
 // Mapping of target properties to selectors and their other properties
 const gadgets = findGadgets(ast);
-console.log(util.inspect(gadgets, { depth: null, colors: true, maxArrayLength: null }));
+// console.log(util.inspect(gadgets, { depth: null, colors: true, maxArrayLength: null }));
 
 console.log("=".repeat(80));
 for (const gadget of gadgets) {
