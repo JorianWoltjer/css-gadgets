@@ -2,24 +2,34 @@ const parsel = require("./parsel.js");
 const satisfy = require("./satisfy.js");
 const css = require('css');
 const fs = require('fs');
-// const util = require('util');
+const { gtRE, ltRE } = require('./util');
 
 // Values here are regexes (full match)
-const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background: .*'].map(parseProperty);
-// Any rule containing these properties will be ignored. Note: you may be able to overwrite any of these manually.
-const AVOID_PROPERTIES = ['opacity: ((0|0?\\.\\d+)|\\d{0,2}(\\.\\d+)?%)', 'display: none', 'z-index: -\d+'].map(parseProperty);
-// const AVOID_PROPERTIES = [].map(parseProperty);
-// TODO: allow filtering selectors by being able to use arbitrary tag names, IDs, nested elements or pseudo-classes
-// TODO: check !important (priority). this doesn't seem like a big issue
-// TODO: check duplicate keys in TARGET_PROPERTIES and AVOID_PROPERTIES
-const LOG_FAILS = false;  // Log when combining selectors into HTML fails. You may be able to come up with a solution manually.
+// const TARGET_PROPERTIES = ['position: fixed', 'width: 100(%|vw)', 'height: 100(%|vw)', 'top: 0', 'display: block', 'left: 0', 'margin: 0', 'background: .*'].map(parseProperty);
+const TARGET_PROPERTIES = [`z-index: ${gtRE(100)}`].map(parseProperty);
+// Any rule containing these properties will be ignored. Note: you may be able to overwrite any of these manually
+// const AVOID_PROPERTIES = ['opacity: ((0|0?\\.\\d+)|\\d{0,2}(\\.\\d+)?%)', 'display: none'].map(parseProperty);
+const AVOID_PROPERTIES = [].map(parseProperty);
+// Write any selectors that you cannot use here, `true` for any value of that sort. Useful to avoid side effects or disallowed HTML
+const AVOID_SELECTORS = {
+    "type": true,
+    "class": [],
+    "id": true,
+    "attribute": true,
+    "combinator": false,
+};
+// Log when combining selectors into HTML fails. You may be able to come up with a solution manually.
+const LOG_FAILED_COMBINATIONS = false;
 
-// copy((await Promise.all([...document.styleSheets].map(s => s.href ? fetch(s.href).then(r => r.text()) : s.ownerNode.innerText))).join('\n'))
-const content = fs.readFileSync(process.argv[2], 'utf8');
-const ast = css.parse(content);
-// console.log(util.inspect(ast, false, null, true));
-// exit();
-
+function ensureNoDuplicates(properties) {
+    const seen = new Set();
+    for (const property of properties) {
+        if (seen.has(property.name)) {
+            throw new Error(`'${property.name}:' is defined twice in property constraints`);
+        }
+        seen.add(property.name);
+    }
+}
 function splitOnce(s, separator) {
     const index = s.indexOf(separator);
     if (index === -1) {
@@ -34,6 +44,20 @@ function parseProperty(s) {
 }
 function serializeProperty(p) {
     return `${p.name}: ${p.value}`;
+}
+function isAllowedSelector(selector) {
+    const tokens = parsel.tokenize(selector);
+    for (const token of tokens) {
+        const avoid = AVOID_SELECTORS[token.type];
+        if (avoid === true) {
+            return false;
+        } else if (avoid instanceof Array) {
+            if (avoid.includes(token.name)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 function findGadgets(ast) {
@@ -60,6 +84,8 @@ function findGadgets(ast) {
 
                 console.log(`${property.name}: ${property.value} => ${rule.selectors.join(', ')}`);
                 for (const selector of rule.selectors) {
+                    if (!isAllowedSelector(selector)) continue;
+
                     // Some selector syntax has higher priority than other (https://developer.mozilla.org/en-US/docs/Web/CSS/Specificity)
                     // The further down the file, the higher the priority
                     const { line, column } = rule.position.start;
@@ -128,6 +154,7 @@ function satisfyMany(selectors) {
         for (let i = 0; i < list.length - 1; i++) {
             list[i].appendChild(list[i + 1]);
         }
+        list.at(-1).innerHTML = "Content";
         return list[0];
     }
 
@@ -146,9 +173,13 @@ function satisfyMany(selectors) {
         for (let j = 0; j < toBeAdded.length; j++) {
             const r = result[j];
             const a = toBeAdded[j];
-            if (r.nodeName !== a.nodeName) {
-                // TODO: if it is a <div>, should make it <any>. then we can chance it once to allow more combinations
-                throw new Error(`Cannot merge ${r.nodeName} with ${a.nodeName}`);
+            // If node names are different, try to merge them
+            if (r.nodeName !== a.nodeName && a.nodeName !== "any") {
+                if (r.nodeName === "any") {
+                    r.nodeName = a.nodeName;
+                } else {
+                    throw new Error(`Cannot merge node name <${r.nodeName}> with <${a.nodeName}>`);
+                }
             }
             for (const attribute of a.attributes) {
                 if (attribute.name == "class") {
@@ -159,7 +190,7 @@ function satisfyMany(selectors) {
                     // Any other attribute may only be added if it doesn't exist or has the same value
                     r.setAttribute(attribute.name, attribute.value);
                 } else {
-                    throw new Error(`Cannot merge attribute ${attribute.name}`);
+                    throw new Error(`Cannot merge attribute ${attribute.name}=`);
                 }
             }
         }
@@ -191,10 +222,8 @@ function findCombinations(gadgets) {
             let error = false;
             try {
                 html = satisfyMany(selectedSelectors.map(s => s.selector));
-                // TODO: find avoid selectors and querySelector the HTML to check (side effects)
-                // ^^ this will be hard because specificity may make it not matter
             } catch (e) {
-                if (!LOG_FAILS) return;
+                if (!LOG_FAILED_COMBINATIONS) return;
                 error = e;
             }
             console.log("Found a combination:");
@@ -205,9 +234,12 @@ function findCombinations(gadgets) {
                 console.log("ERROR:");
                 console.log(error.message);
             } else {
-                console.log("HTML:");
+                console.log("```html");
                 console.log(html);
+                console.log("```");
+                fs.appendFileSync('output.html', html + '\n');
             }
+            console.log();
             return;
         }
 
@@ -238,9 +270,24 @@ function findCombinations(gadgets) {
     backtrack(0); // Start at level 0
 }
 
+if (process.argv.length !== 3) {
+    console.error("Usage: node index.js <style.css>");
+    process.exit(1);
+}
+
+// copy((await Promise.all([...document.styleSheets].map(s => s.href ? fetch(s.href).then(r => r.text()) : s.ownerNode.innerText))).join('\n'))
+const content = fs.readFileSync(process.argv[2], 'utf8');
+const ast = css.parse(content);
+// console.log(util.inspect(ast, false, null, true));
+// exit();
+
+ensureNoDuplicates(TARGET_PROPERTIES);
+ensureNoDuplicates(AVOID_PROPERTIES);
+
 // Mapping of target properties to selectors and their other properties
 const gadgets = findGadgets(ast);
 // console.log(util.inspect(gadgets, { depth: null, colors: true, maxArrayLength: null }));
+// TODO: option to just print gadgets, don't find combinations
 
 console.log("=".repeat(80));
 for (const gadget of gadgets) {

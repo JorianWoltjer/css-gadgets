@@ -64,7 +64,7 @@ function createSatisfy() {
     function create(part, n) {
 
         var tag = exprRegex.TAG.exec(part),
-            node = doc.createElement(tag && tag[1] !== '*' ? tag[1] : 'div'),
+            node = doc.createElement(tag && tag[1] !== '*' ? tag[1] : 'any'),
             fragment = doc.createDocumentFragment(),
             c = callbackTypes.length,
             match, regex, callback;
