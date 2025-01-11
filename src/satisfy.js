@@ -12,8 +12,7 @@
  * from the Sizzle Selector Engine.
  */
 
-const jsdom = require("jsdom");
-const { JSDOM } = jsdom;
+import { JSDOM } from 'jsdom';
 const { window } = new JSDOM();
 const { document } = window;
 
@@ -183,4 +182,4 @@ function createSatisfy() {
     return satisfy;
 }
 
-module.exports = createSatisfy();
+export default createSatisfy();

@@ -1,4 +1,13 @@
 {
+  "name": "css-gadgets",
+  "version": "1.0.0",
+  "description": "Find CSS gadgets and generate matching HTML",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node src/test/index.mjs"
+  },
+  "type": "module",
   "dependencies": {
     "jsdom": "^25.0.1",
     "css": "git+https://github.com/JorianWoltjer/css-tools.git"

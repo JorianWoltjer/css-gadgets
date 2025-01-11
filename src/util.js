@@ -1,3 +1,35 @@
+import path from 'path';
+
+
+export function outputFilename(input, suffix) {
+    const name = path.basename(input, '.css');
+    return path.join(path.dirname(input), `${name}-${suffix}`);
+}
+export function ensureNoDuplicates(properties) {
+    const seen = new Set();
+    for (const property of properties) {
+        if (seen.has(property.name)) {
+            throw new Error(`'${property.name}:' is defined twice in property constraints`);
+        }
+        seen.add(property.name);
+    }
+}
+function splitOnce(s, separator) {
+    const index = s.indexOf(separator);
+    if (index === -1) {
+        return [s];
+    }
+    return [s.slice(0, index), s.slice(index + separator.length)];
+}
+export function parseProperty(s) {
+    let [name, value] = splitOnce(s, ':').map(s => s.trim().replace(/;$/, '').toLowerCase());
+    value = new RegExp(`^${value}$`);
+    return { name, value };
+}
+export function serializeProperty(p) {
+    return `${p.name}: ${p.value}`;
+}
+
 function simplify(regex) {
     return regex
         .replaceAll('[0-0]', '0')
@@ -25,7 +57,7 @@ function gtRules(n) {
     rules.push(`\\d{${n.length + 1},}`);
     return simplify(`(${rules.join('|')})`);
 }
-function gtRE(n) {
+export function gtRE(n) {
     // Generate a Regular Expression that matches any number greater than n
     if (n < 0) {
         return `^(-${ltRules(-n)}|\\d+)$`;
@@ -50,7 +82,7 @@ function ltRules(n) {
     rules.push(`\\d{0,${n.length - 1}}`);
     return simplify(`(${rules.join('|')})`);
 }
-function ltRE(n) {
+export function ltRE(n) {
     // Generate a Regular Expression that matches any number less than n
     if (n < 0) {
         return `^-${gtRules(-n)}$`;
@@ -58,27 +90,3 @@ function ltRE(n) {
         return `^(-\\d+|${ltRules(n)})$`;
     }
 }
-
-if (require.main === module) {
-    console.log(gtRE(8942));
-    console.log(ltRE(1042));
-
-    // Tests
-    for (let n = -100; n < 100; n++) {
-        ns = Array.from({ length: 1000 }, () => Math.floor(Math.random() * 2000) - 1000);
-        ns.forEach(n => {
-            const gt_re = new RegExp(gtRE(n));
-            const lt_re = new RegExp(ltRE(n));
-            ns.forEach(m => {
-                if (m > n !== Boolean(gt_re.test(m))) {
-                    console.error(`gt(${n}) failed for ${m}: ${gt_re}`);
-                }
-                if (m < n !== Boolean(lt_re.test(m))) {
-                    console.error(`lt(${n}) failed for ${m}: ${lt_re}`);
-                }
-            });
-        });
-    }
-}
-
-module.exports = { gtRE, ltRE };

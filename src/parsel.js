@@ -9,8 +9,8 @@ const TOKENS = {
     universal: /(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?\*/gu,
     type: /(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?(?<name>[-@\w\P{ASCII}]+)/gu, // this must be last
 };
-const TRIM_TOKENS = new Set(['combinator', 'comma']);
-const RECURSIVE_PSEUDO_CLASSES = new Set([
+export const TRIM_TOKENS = new Set(['combinator', 'comma']);
+export const RECURSIVE_PSEUDO_CLASSES = new Set([
     'not',
     'is',
     'where',
@@ -22,7 +22,7 @@ const RECURSIVE_PSEUDO_CLASSES = new Set([
     'nth-last-child',
 ]);
 const nthChildRegExp = /(?<index>[\dn+-]+)\s+of\s+(?<subtree>.+)/;
-const RECURSIVE_PSEUDO_CLASSES_ARGS = {
+export const RECURSIVE_PSEUDO_CLASSES_ARGS = {
     'nth-child': nthChildRegExp,
     'nth-last-child': nthChildRegExp,
 };
@@ -35,7 +35,7 @@ const getArgumentPatternByType = (type) => {
             return TOKENS[type];
     }
 };
-function gobbleParens(text, offset) {
+export function gobbleParens(text, offset) {
     let nesting = 0;
     let result = '';
     for (; offset < text.length; offset++) {
@@ -55,7 +55,7 @@ function gobbleParens(text, offset) {
     }
     return result;
 }
-function tokenizeBy(text, grammar = TOKENS) {
+export function tokenizeBy(text, grammar = TOKENS) {
     if (!text) {
         return [];
     }
@@ -108,7 +108,7 @@ function tokenizeBy(text, grammar = TOKENS) {
 }
 const STRING_PATTERN = /(['"])([^\\\n]+?)\1/g;
 const ESCAPE_PATTERN = /\\./g;
-function tokenize(selector, grammar = TOKENS) {
+export function tokenize(selector, grammar = TOKENS) {
     // Prevent leading/trailing whitespaces from being interpreted as combinators
     selector = selector.trim();
     if (selector === '') {
@@ -236,7 +236,7 @@ function nestTokens(tokens, { list = true } = {}) {
 /**
  * Traverse an AST in depth-first order
  */
-function* flatten(node,
+export function* flatten(node,
     /**
      * @internal
      */
@@ -264,7 +264,7 @@ function* flatten(node,
 /**
  * Traverse an AST (or part thereof), in depth-first order
  */
-function walk(node, visit,
+export function walk(node, visit,
     /**
      * @internal
      */
@@ -283,7 +283,7 @@ function walk(node, visit,
  * @param options.recursive - Whether to parse the arguments of pseudo-classes like :is(), :has() etc. Defaults to true.
  * @param options.list - Whether this can be a selector list (A, B, C etc). Defaults to true.
  */
-function parse(selector, { recursive = true, list = true } = {}) {
+export function parse(selector, { recursive = true, list = true } = {}) {
     const tokens = tokenize(selector);
     if (!tokens) {
         return;
@@ -324,7 +324,7 @@ function parse(selector, { recursive = true, list = true } = {}) {
 /**
  * Converts the given list or (sub)tree to a string.
  */
-function stringify(listOrNode) {
+export function stringify(listOrNode) {
     if (Array.isArray(listOrNode)) {
         return listOrNode.map((token) => token.content).join("");
     }
@@ -347,7 +347,7 @@ function stringify(listOrNode) {
 /**
  * To convert the specificity array to a number
  */
-function specificityToNumber(specificity, base) {
+export function specificityToNumber(specificity, base) {
     base = base || Math.max(...specificity) + 1;
     return (specificity[0] * (base << 1) + specificity[1] * base + specificity[2]);
 }
@@ -356,7 +356,7 @@ function specificityToNumber(specificity, base) {
  *
  * If the selector is a list, the max specificity is returned.
  */
-function specificity(selector) {
+export function specificity(selector) {
     let ast = selector;
     if (typeof ast === 'string') {
         ast = parse(ast, { recursive: true });
@@ -408,5 +408,3 @@ function specificity(selector) {
     }
     return ret;
 }
-
-export { RECURSIVE_PSEUDO_CLASSES, RECURSIVE_PSEUDO_CLASSES_ARGS, TOKENS, TRIM_TOKENS, flatten, gobbleParens, parse, specificity, specificityToNumber, stringify, tokenize, tokenizeBy, walk };
